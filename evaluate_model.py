@@ -19,8 +19,26 @@ Options:
     --model-path: Path to the model file (default: outputs/models/baseline_model.pkl)
     --data-path: Path to the dataset (default: datasets/Dataset_Cay quyet dinh_HV.xlsx)
     --output-dir: Output directory for reports (default: outputs/evaluation)
+    --max-tree-depth: Maximum depth for decision tree visualization (default: None - show full tree)
+    --limit-viz-depth: Limit visualization depth to max-tree-depth (default: show full tree)
     --generate-reports: Generate markdown reports (default: True)
     --visualize-tree: Generate decision tree visualization (default: True)
+
+Examples:
+    # Basic evaluation - shows FULL tree depth (recommended)
+    python evaluate_model.py
+    
+    # Show full tree but also limit one visualization to depth 4
+    python evaluate_model.py --max-tree-depth 4 --limit-viz-depth
+    
+    # Force visualization to show only depth 2 (for overview)
+    python evaluate_model.py --max-tree-depth 2 --limit-viz-depth
+    
+    # Skip tree visualization entirely
+    python evaluate_model.py --no-tree-viz
+    
+    Note: By default, the script shows the FULL tree depth of your trained model.
+    Use --limit-viz-depth only if you want to artificially limit the visualization depth.
 """
 
 import sys
@@ -68,7 +86,7 @@ except ImportError:
 class ModelEvaluator:
     """Comprehensive model evaluation class."""
     
-    def __init__(self, model_path, data_path, output_dir="outputs/evaluation"):
+    def __init__(self, model_path, data_path, output_dir="outputs/evaluation", max_tree_depth=None, limit_viz_depth=False):
         """
         Initialize the model evaluator.
         
@@ -80,11 +98,18 @@ class ModelEvaluator:
             Path to the dataset
         output_dir : str
             Directory to save evaluation outputs
+        max_tree_depth : int or None
+            Maximum depth for decision tree visualization. If None, shows full tree depth.
+            If limit_viz_depth=False, this parameter is ignored.
+        limit_viz_depth : bool
+            Whether to limit the visualization depth. If False, shows the full model tree.
         """
         self.model_path = Path(model_path)
         self.data_path = Path(data_path)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.max_tree_depth = max_tree_depth
+        self.limit_viz_depth = limit_viz_depth
         
         # Initialize storage for results
         self.model = None
@@ -269,7 +294,9 @@ class ModelEvaluator:
             'n_nodes': int(tree.node_count),
             'n_leaves': int(tree.n_leaves),
             'n_features_used': int(np.sum(self.model.feature_importances_ > 0)),
-            'total_features': len(feature_names)
+            'total_features': len(feature_names),
+            'configured_max_depth': self.max_tree_depth,
+            'depth_limiting_enabled': self.limit_viz_depth
         }
         
         # Analyze tree structure
@@ -279,19 +306,30 @@ class ModelEvaluator:
         tree_rules = self.export_tree_rules(feature_names, class_names)
         
         # Create tree visualization
-        tree_plot_path = None
+        tree_visualizations = None
         if MATPLOTLIB_AVAILABLE:
-            tree_plot_path = self.visualize_decision_tree(feature_names, class_names)
+            tree_visualizations = self.visualize_decision_tree(feature_names, class_names)
         
         self.results['decision_tree'] = {
             'statistics': tree_stats,
             'analysis': tree_analysis,
             'rules': tree_rules,
-            'visualization_path': str(tree_plot_path) if tree_plot_path else None
+            'visualizations': tree_visualizations
         }
         
+        viz_info = ""
+        if tree_visualizations:
+            actual_depth = tree_visualizations.get('actual_model_depth', tree_stats['max_depth'])
+            viz_depth = tree_visualizations.get('visualization_depth', actual_depth)
+            depth_limited = tree_visualizations.get('depth_limited', False)
+            
+            if depth_limited:
+                viz_info = f"(showing depth {viz_depth} of {actual_depth})"
+            else:
+                viz_info = f"(full tree depth {actual_depth})"
+        
         logger.info(f"Tree analysis: {tree_stats['n_nodes']} nodes, "
-                   f"{tree_stats['n_leaves']} leaves, depth {tree_stats['max_depth']}")
+                   f"{tree_stats['n_leaves']} leaves, model depth {tree_stats['max_depth']} {viz_info}")
 
     def analyze_tree_structure(self, tree, feature_names, class_names):
         """Analyze the decision tree structure in detail."""
@@ -521,18 +559,29 @@ class ModelEvaluator:
         return "\n".join(insights)
 
     def visualize_decision_tree(self, feature_names, class_names):
-        """Create and save decision tree visualization."""
+        """Create and save decision tree visualization with configurable depth."""
         
         if not MATPLOTLIB_AVAILABLE:
             logger.warning("Matplotlib not available, skipping tree visualization")
             return None
         
-        # Create high-quality tree visualization
+        # Get the actual model depth
+        actual_model_depth = self.model.get_depth()
+        
+        # Determine visualization depth
+        if self.limit_viz_depth and self.max_tree_depth is not None:
+            viz_depth = min(self.max_tree_depth, actual_model_depth)
+            depth_limited = True
+        else:
+            viz_depth = None  # Show full tree
+            depth_limited = False
+        
+        # Create main tree visualization
         fig, ax = plt.subplots(1, 1, figsize=(24, 16))
         
         plot_tree(
             self.model,
-            max_depth=4,  # Limit depth for readability
+            max_depth=viz_depth,  # None means show full depth
             feature_names=feature_names,
             class_names=class_names,
             filled=True,
@@ -540,48 +589,98 @@ class ModelEvaluator:
             proportion=True,
             rounded=True,
             precision=3,
-            fontsize=8,
+            fontsize=max(6, 12 - (viz_depth or actual_model_depth)),  # Adjust font size based on depth
             ax=ax
         )
         
-        ax.set_title("Customer Churn Prediction - Decision Tree", 
-                    fontsize=16, fontweight='bold', pad=20)
+        # Create appropriate title
+        if depth_limited:
+            title = f"Customer Churn Prediction - Decision Tree (Showing Depth 1-{viz_depth} of {actual_model_depth})"
+        else:
+            title = f"Customer Churn Prediction - Decision Tree (Full Tree - Depth {actual_model_depth})"
         
-        # Save the plot
-        plot_path = self.output_dir / "decision_tree_visualization.png"
+        ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
+        
+        # Save the main plot
+        if depth_limited:
+            plot_path = self.output_dir / f"decision_tree_limited_depth_{viz_depth}.png"
+        else:
+            plot_path = self.output_dir / f"decision_tree_full_depth_{actual_model_depth}.png"
+        
         plt.savefig(plot_path, dpi=300, bbox_inches='tight', 
                    facecolor='white', edgecolor='none')
         plt.close()
         
-        # Create a simplified tree for better readability
-        fig, ax = plt.subplots(1, 1, figsize=(20, 12))
+        # Create additional visualizations for comparison
+        visualization_paths = [plot_path]
+        depths_generated = [viz_depth or actual_model_depth]
         
-        plot_tree(
-            self.model,
-            max_depth=3,  # Even more simplified
-            feature_names=feature_names,
-            class_names=class_names,
-            filled=True,
-            impurity=False,  # Remove impurity for cleaner look
-            proportion=True,
-            rounded=True,
-            precision=2,
-            fontsize=10,
-            ax=ax
-        )
+        # Always create a simplified overview (depth 2) if the tree is deeper
+        if actual_model_depth > 2:
+            fig, ax = plt.subplots(1, 1, figsize=(16, 10))
+            
+            plot_tree(
+                self.model,
+                max_depth=2,
+                feature_names=feature_names,
+                class_names=class_names,
+                filled=True,
+                impurity=False,
+                proportion=True,
+                rounded=True,
+                precision=2,
+                fontsize=12,
+                ax=ax
+            )
+            
+            ax.set_title(f"Customer Churn Prediction - Overview (Depth 1-2 of {actual_model_depth})", 
+                        fontsize=16, fontweight='bold', pad=20)
+            
+            overview_plot_path = self.output_dir / "decision_tree_overview_depth_2.png"
+            plt.savefig(overview_plot_path, dpi=300, bbox_inches='tight',
+                       facecolor='white', edgecolor='none')
+            plt.close()
+            visualization_paths.append(overview_plot_path)
+            depths_generated.append(2)
         
-        ax.set_title("Customer Churn Prediction - Simplified Decision Tree (Depth=3)", 
-                    fontsize=16, fontweight='bold', pad=20)
+        # Create a mid-level view if the tree is very deep (depth 4)
+        if actual_model_depth > 4:
+            fig, ax = plt.subplots(1, 1, figsize=(20, 12))
+            
+            plot_tree(
+                self.model,
+                max_depth=4,
+                feature_names=feature_names,
+                class_names=class_names,
+                filled=True,
+                impurity=True,
+                proportion=True,
+                rounded=True,
+                precision=2,
+                fontsize=10,
+                ax=ax
+            )
+            
+            ax.set_title(f"Customer Churn Prediction - Mid-Level View (Depth 1-4 of {actual_model_depth})", 
+                        fontsize=16, fontweight='bold', pad=20)
+            
+            mid_plot_path = self.output_dir / "decision_tree_mid_depth_4.png"
+            plt.savefig(mid_plot_path, dpi=300, bbox_inches='tight',
+                       facecolor='white', edgecolor='none')
+            plt.close()
+            visualization_paths.append(mid_plot_path)
+            depths_generated.append(4)
         
-        # Save simplified version
-        simplified_plot_path = self.output_dir / "decision_tree_simplified.png"
-        plt.savefig(simplified_plot_path, dpi=300, bbox_inches='tight',
-                   facecolor='white', edgecolor='none')
-        plt.close()
+        logger.info(f"Tree visualizations saved to: {', '.join(str(p) for p in visualization_paths)}")
         
-        logger.info(f"Tree visualizations saved to: {plot_path} and {simplified_plot_path}")
-        
-        return plot_path
+        return {
+            'main_visualization': str(plot_path),
+            'all_visualizations': [str(p) for p in visualization_paths],
+            'depths_generated': depths_generated,
+            'actual_model_depth': actual_model_depth,
+            'visualization_depth': viz_depth or actual_model_depth,
+            'depth_limited': depth_limited
+        }
 
     def calculate_business_impact(self):
         """Calculate business impact metrics."""
@@ -742,14 +841,23 @@ class ModelEvaluator:
         tree_info = ""
         if 'decision_tree' in self.results and self.results['decision_tree']:
             tree_stats = self.results['decision_tree']['statistics']
+            visualizations = self.results['decision_tree']['visualizations']
+            
+            viz_info = ""
+            if visualizations:
+                viz_files = visualizations.get('all_visualizations', [])
+                depths = [d for d in visualizations.get('depths_generated', []) if d is not None]
+                viz_info = f"- **Visualizations Generated**: {len(viz_files)} files at depths {depths}"
+            
             tree_info = f"""
 
 ## Decision Tree Analysis
-- **Tree Depth**: {tree_stats['max_depth']} levels
+- **Actual Tree Depth**: {tree_stats['max_depth']} levels
+- **Configured Max Depth**: {tree_stats['configured_max_depth']} levels
 - **Total Nodes**: {tree_stats['n_nodes']}
 - **Leaf Nodes**: {tree_stats['n_leaves']}
 - **Features Used**: {tree_stats['n_features_used']}/{tree_stats['total_features']}
-- **Tree Visualization**: Available in PNG format
+{viz_info}
 - **Decision Rules**: Exported to text file
 """
         
@@ -899,7 +1007,24 @@ Actual    No   {cm['true_negatives']:4d} {cm['false_positives']:4d}
         # Add tree information if available
         if 'decision_tree' in self.results and self.results['decision_tree']:
             tree_stats = self.results['decision_tree']['statistics']
-            print(f"Tree Depth: {tree_stats['max_depth']}")
+            visualizations = self.results['decision_tree']['visualizations']
+            print(f"Model Tree Depth: {tree_stats['max_depth']}")
+            
+            if visualizations:
+                actual_depth = visualizations.get('actual_model_depth', tree_stats['max_depth'])
+                viz_depth = visualizations.get('visualization_depth', actual_depth)
+                depth_limited = visualizations.get('depth_limited', False)
+                
+                if depth_limited:
+                    print(f"Visualization Depth: {viz_depth} (limited from {actual_depth})")
+                else:
+                    print(f"Visualization Depth: {viz_depth} (full tree)")
+                    
+                viz_count = len(visualizations.get('all_visualizations', []))
+                print(f"Visualizations Generated: {viz_count}")
+            else:
+                print(f"Depth Limiting: {'Enabled' if tree_stats['depth_limiting_enabled'] else 'Disabled'}")
+            
             print(f"Tree Nodes: {tree_stats['n_nodes']}")
             print(f"Features Used: {tree_stats['n_features_used']}/{tree_stats['total_features']}")
 
@@ -913,6 +1038,10 @@ def main():
                        help='Path to the dataset')
     parser.add_argument('--output-dir', default='outputs/evaluation',
                        help='Output directory for reports')
+    parser.add_argument('--max-tree-depth', type=int, default=None,
+                       help='Maximum depth for decision tree visualization (default: None - show full tree)')
+    parser.add_argument('--limit-viz-depth', action='store_true',
+                       help='Limit visualization depth to max-tree-depth (default: show full tree)')
     parser.add_argument('--no-reports', action='store_true',
                        help='Skip generating markdown reports')
     parser.add_argument('--no-tree-viz', action='store_true',
@@ -924,7 +1053,9 @@ def main():
     evaluator = ModelEvaluator(
         model_path=args.model_path,
         data_path=args.data_path,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        max_tree_depth=args.max_tree_depth,
+        limit_viz_depth=args.limit_viz_depth
     )
     
     results = evaluator.run_complete_evaluation(

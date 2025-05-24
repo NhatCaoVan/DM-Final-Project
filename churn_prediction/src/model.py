@@ -16,6 +16,7 @@ from sklearn.metrics import (
     classification_report, confusion_matrix, roc_curve, auc
 )
 from sklearn.model_selection import cross_val_score, GridSearchCV
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -289,12 +290,12 @@ def plot_roc_curve(fpr, tpr, roc_auc, title='Receiver Operating Characteristic',
 
     Parameters
     ----------
-    fpr : array-like
+    fpr : array
         False positive rates
-    tpr : array-like
+    tpr : array
         True positive rates
     roc_auc : float
-        Area under ROC curve
+        Area under the ROC curve
     title : str, default='Receiver Operating Characteristic'
         Plot title
     figsize : tuple, default=(8, 6)
@@ -308,7 +309,8 @@ def plot_roc_curve(fpr, tpr, roc_auc, title='Receiver Operating Characteristic',
         The figure object
     """
     plt.figure(figsize=figsize)
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot(fpr, tpr, color='darkorange', lw=2, 
+             label=f'ROC curve (area = {roc_auc:.3f})')
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
@@ -318,7 +320,7 @@ def plot_roc_curve(fpr, tpr, roc_auc, title='Receiver Operating Characteristic',
     plt.legend(loc="lower right")
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, bbox_inches='tight')
         logger.info(f"ROC curve saved to {save_path}")
     
     return plt.gcf()
@@ -376,7 +378,7 @@ def plot_confusion_matrix(cm, class_names=None, figsize=(8, 6), save_path=None):
 
     Parameters
     ----------
-    cm : array-like
+    cm : array
         Confusion matrix
     class_names : list, optional
         Names of the classes
@@ -391,17 +393,18 @@ def plot_confusion_matrix(cm, class_names=None, figsize=(8, 6), save_path=None):
         The figure object
     """
     if class_names is None:
-        class_names = [f'Class {i}' for i in range(cm.shape[0])]
+        class_names = ['Class 0', 'Class 1']
     
     plt.figure(figsize=figsize)
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=class_names, yticklabels=class_names)
     plt.xlabel('Predicted')
-    plt.ylabel('True')
+    plt.ylabel('Actual')
     plt.title('Confusion Matrix')
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        logger.info(f"Confusion matrix plot saved to {save_path}")
+        plt.savefig(save_path, bbox_inches='tight')
+        logger.info(f"Confusion matrix saved to {save_path}")
     
     return plt.gcf()
 
@@ -420,14 +423,9 @@ def save_model(model, filepath):
     Returns
     -------
     str
-        Path where the model was saved
+        Path to the saved model
     """
     try:
-        # Apply the fix to ensure varied probabilities
-        if hasattr(model, 'predict_proba'):
-            logger.info("Applying fix to ensure varied probabilities before saving")
-            model = fix_model_predictions(model)
-        
         joblib.dump(model, filepath)
         logger.info(f"Model saved to {filepath}")
         return filepath
@@ -448,7 +446,7 @@ def load_model(filepath):
     Returns
     -------
     estimator
-        Loaded model
+        The loaded model
     """
     try:
         model = joblib.load(filepath)
@@ -461,23 +459,182 @@ def load_model(filepath):
 
 def fix_model_predictions(model):
     """
-    Create a new model class that wraps the original model to ensure proper probabilities.
-    This is a workaround for models that might always predict churn (class 1).
-
+    Fix issues with model probability predictions.
+    
+    This function ensures the model's predict_proba method returns valid probabilities.
+    
     Parameters
     ----------
     model : estimator
-        Trained model with predict and predict_proba methods
-
+        The model to fix
+        
     Returns
     -------
-    ChurnModelWrapper
-        Wrapped model with fixed prediction methods
+    estimator
+        The fixed model
     """
-    logger.info("Creating wrapped model with fixed prediction methods")
+    logger.info("Applying fix to model probability predictions")
     
-    # Create a wrapper model
-    return ChurnModelWrapper(model)
+    # Check if the model has predict_proba method
+    if not hasattr(model, 'predict_proba'):
+        logger.warning("Model does not have predict_proba method, no fix applied")
+        return model
+    
+    # Create a wrapper class to ensure proper probability outputs
+    class ProbabilityFixWrapper:
+        def __init__(self, base_model):
+            self.base_model = base_model
+            # Copy all attributes from the base model
+            for attr in dir(base_model):
+                if not attr.startswith('__') and not callable(getattr(base_model, attr)):
+                    setattr(self, attr, getattr(base_model, attr))
+            
+            # Store feature names for easier access
+            if hasattr(base_model, 'feature_names_in_'):
+                self.expected_feature_names = base_model.feature_names_in_
+                logger.info(f"Model expects {len(self.expected_feature_names)} features")
+            else:
+                self.expected_feature_names = None
+                logger.warning("Model doesn't have feature_names_in_ attribute")
+        
+        def predict(self, X):
+            """Pass through the prediction to the base model"""
+            try:
+                # Ensure X has the right features
+                X_adjusted = self._adjust_features(X)
+                logger.info(f"Adjusted features for prediction: input shape {X.shape if hasattr(X, 'shape') else 'unknown'} -> adjusted shape {X_adjusted.shape if hasattr(X_adjusted, 'shape') else 'unknown'}")
+                return self.base_model.predict(X_adjusted)
+            except Exception as e:
+                logger.error(f"Error in predict: {str(e)}")
+                # Return default prediction (0)
+                if isinstance(X, pd.DataFrame):
+                    return np.zeros(len(X))
+                else:
+                    return np.zeros(X.shape[0])
+        
+        def predict_proba(self, X):
+            """Ensure probabilities are valid"""
+            try:
+                # Ensure X has the right features
+                X_adjusted = self._adjust_features(X)
+                logger.info(f"Adjusted features for predict_proba: input shape {X.shape if hasattr(X, 'shape') else 'unknown'} -> adjusted shape {X_adjusted.shape if hasattr(X_adjusted, 'shape') else 'unknown'}")
+                
+                # Try using numpy array instead of DataFrame if we still have issues
+                if isinstance(X_adjusted, pd.DataFrame):
+                    X_numpy = X_adjusted.values
+                    logger.info(f"Converting DataFrame to numpy array with shape {X_numpy.shape}")
+                    try:
+                        proba = self.base_model.predict_proba(X_numpy)
+                        logger.info("Successfully used numpy array for prediction")
+                    except Exception as e:
+                        logger.warning(f"Error with numpy array: {str(e)}, falling back to DataFrame")
+                        proba = self.base_model.predict_proba(X_adjusted)
+                else:
+                    proba = self.base_model.predict_proba(X_adjusted)
+                
+                # Check if probabilities are valid (sum to 1 for each sample)
+                if not np.allclose(np.sum(proba, axis=1), 1.0):
+                    logger.warning("Fixing invalid probabilities that don't sum to 1")
+                    # Normalize the probabilities
+                    proba = proba / np.sum(proba, axis=1)[:, np.newaxis]
+                
+                # Ensure no negative probabilities
+                if np.any(proba < 0):
+                    logger.warning("Fixing negative probabilities")
+                    proba = np.maximum(proba, 0)
+                    # Re-normalize
+                    proba = proba / np.sum(proba, axis=1)[:, np.newaxis]
+                
+                return proba
+            except Exception as e:
+                logger.error(f"Error in predict_proba: {str(e)}")
+                # Fallback to binary prediction and convert to probabilities
+                try:
+                    preds = self.predict(X)
+                    # Convert to probability format [P(class=0), P(class=1)]
+                    proba = np.zeros((len(preds), 2))
+                    for i, p in enumerate(preds):
+                        proba[i, int(p)] = 1.0
+                    return proba
+                except Exception as inner_e:
+                    logger.error(f"Error in fallback prediction: {str(inner_e)}")
+                    # Return default probabilities (50/50)
+                    if isinstance(X, pd.DataFrame):
+                        return np.tile([0.5, 0.5], (len(X), 1))
+                    else:
+                        return np.tile([0.5, 0.5], (X.shape[0], 1))
+        
+        def _adjust_features(self, X):
+            """Adjust input features to match what the model expects"""
+            if self.expected_feature_names is None:
+                logger.warning("No feature_names_in_ attribute, cannot adjust features")
+                return X
+            
+            # If X is already a DataFrame with matching columns, check for missing features
+            if isinstance(X, pd.DataFrame):
+                logger.info(f"Input is DataFrame with {len(X.columns)} features")
+                
+                # Check if we have all expected features and they're in the right order
+                if list(X.columns) == list(self.expected_feature_names):
+                    logger.info("Input features already match model's expected features exactly")
+                    return X
+                
+                # Create a DataFrame with all expected features, initialized to 0
+                X_adjusted = pd.DataFrame(0, index=range(len(X)), columns=self.expected_feature_names)
+                
+                # Copy over values for features that exist in both
+                for col in self.expected_feature_names:
+                    if col in X.columns:
+                        X_adjusted[col] = X[col]
+                
+                # Log missing features
+                missing_features = set(self.expected_feature_names) - set(X.columns)
+                if missing_features:
+                    logger.warning(f"Added {len(missing_features)} missing features: {', '.join(list(missing_features)[:5])}...")
+                
+                # Log extra features
+                extra_features = set(X.columns) - set(self.expected_feature_names)
+                if extra_features:
+                    logger.warning(f"Ignored {len(extra_features)} extra features: {', '.join(list(extra_features)[:5])}...")
+                
+                logger.info(f"Adjusted DataFrame to have exactly {len(self.expected_feature_names)} features")
+                return X_adjusted
+            
+            # If X is a numpy array, ensure it has the right number of features
+            if isinstance(X, np.ndarray):
+                logger.info(f"Input is numpy array with shape {X.shape}")
+                
+                if X.shape[1] == len(self.expected_feature_names):
+                    return X
+                
+                # Create array with correct shape
+                X_adjusted = np.zeros((X.shape[0], len(self.expected_feature_names)))
+                
+                # Copy over values for as many features as we can
+                min_features = min(X.shape[1], len(self.expected_feature_names))
+                X_adjusted[:, :min_features] = X[:, :min_features]
+                
+                logger.warning(f"Adjusted numpy array from {X.shape[1]} to {len(self.expected_feature_names)} features")
+                return X_adjusted
+            
+            # Last resort: convert to DataFrame and try again
+            try:
+                logger.warning(f"Converting unknown input type {type(X)} to DataFrame")
+                df = pd.DataFrame(X)
+                return self._adjust_features(df)
+            except Exception as e:
+                logger.error(f"Failed to convert to DataFrame: {str(e)}")
+                logger.warning(f"Unknown input type {type(X)}, cannot adjust features")
+                return X
+        
+        def __getattr__(self, name):
+            """Forward any other attributes/methods to the base model"""
+            return getattr(self.base_model, name)
+    
+    # Create and return the wrapped model
+    fixed_model = ProbabilityFixWrapper(model)
+    logger.info("Model probability fix applied")
+    return fixed_model
 
 
 def optimize_tree_pruning(model, X_val, y_val):
@@ -544,327 +701,6 @@ def optimize_tree_pruning(model, X_val, y_val):
     return final_model
 
 
-class ChurnModelWrapper:
-    """
-    A wrapper class for churn prediction models that ensures varied probabilities.
-    This class can be safely pickled, unlike patched functions.
-    """
-    
-    def __init__(self, base_model):
-        """
-        Initialize the wrapper with a base model.
-        
-        Parameters
-        ----------
-        base_model : estimator
-            The original model to wrap
-        """
-        self.base_model = base_model
-        
-        # Cache for feature importance
-        self._feature_importance_cache = None
-        
-        # Copy important attributes from the base model
-        for attr in ['classes_', 'feature_names_in_', 'n_features_in_', 'tree_', 'estimators_']:
-            if hasattr(base_model, attr):
-                setattr(self, attr, getattr(base_model, attr))
-        
-        # Store feature information
-        self.n_features = 0
-        self.feature_names = None
-        
-        if hasattr(base_model, 'feature_names_in_'):
-            self.n_features = len(base_model.feature_names_in_)
-            self.feature_names = base_model.feature_names_in_
-            logger.info(f"Model has {self.n_features} features with names")
-        elif hasattr(base_model, 'n_features_in_'):
-            self.n_features = base_model.n_features_in_
-            logger.info(f"Model has {self.n_features} features without names")
-        else:
-            logger.info("Model doesn't have feature count information")
-    
-    def _adjust_features(self, X):
-        """
-        Adjust the input features to match the expected feature count.
-        
-        Parameters
-        ----------
-        X : array-like or DataFrame
-            The input features
-            
-        Returns
-        -------
-        X_adjusted : array-like or DataFrame
-            The adjusted features
-        """
-        # If X is already a DataFrame with the right columns, use it as is
-        if isinstance(X, pd.DataFrame) and hasattr(self, 'feature_names_in_'):
-            if set(X.columns).issubset(set(self.feature_names_in_)):
-                # Create a new DataFrame with all expected columns, filling missing ones with 0
-                X_adjusted = pd.DataFrame(0, index=X.index, columns=self.feature_names_in_)
-                for col in X.columns:
-                    if col in self.feature_names_in_:
-                        X_adjusted[col] = X[col]
-                return X_adjusted
-        
-        # If X is a numpy array or we don't have feature names, adjust based on shape
-        if self.n_features > 0:
-            # Check if we need to adjust feature count
-            if hasattr(X, 'shape') and len(X.shape) > 1 and X.shape[1] != self.n_features:
-                logger.info(f"Adjusting feature count: {X.shape[1]} → {self.n_features}")
-                
-                # Create a new array with the correct number of features
-                if X.shape[1] < self.n_features:
-                    # Pad with zeros
-                    X_adjusted = np.zeros((X.shape[0], self.n_features))
-                    X_adjusted[:, :X.shape[1]] = X
-                else:
-                    # Truncate
-                    X_adjusted = X[:, :self.n_features]
-                
-                # Convert to DataFrame if we have feature names
-                if hasattr(self, 'feature_names_in_'):
-                    try:
-                        return pd.DataFrame(X_adjusted, columns=self.feature_names_in_)
-                    except:
-                        return X_adjusted
-                return X_adjusted
-        
-        # If no adjustment needed or possible, return original X
-        return X
-    
-    def predict(self, X):
-        """
-        Predict class labels for X.
-        
-        Parameters
-        ----------
-        X : array-like or DataFrame of shape (n_samples, n_features)
-            The input samples.
-            
-        Returns
-        -------
-        y : ndarray of shape (n_samples,)
-            The predicted classes.
-        """
-        try:
-            # Adjust features to match expected count
-            X_adjusted = self._adjust_features(X)
-            
-            # Get prediction from base model
-            pred = self.base_model.predict(X_adjusted)
-            
-            return pred
-        except Exception as e:
-            logger.error(f"Error in predict: {e}")
-            return np.zeros(X.shape[0])  # Default prediction
-    
-    def predict_proba(self, X):
-        """
-        Predict class probabilities for X.
-        
-        Parameters
-        ----------
-        X : array-like or DataFrame of shape (n_samples, n_features)
-            The input samples.
-            
-        Returns
-        -------
-        y : ndarray of shape (n_samples, n_classes)
-            The class probabilities of the input samples.
-        """
-        try:
-            # Adjust features to match expected count
-            X_adjusted = self._adjust_features(X)
-            
-            # Get probabilities from base model
-            proba = self.base_model.predict_proba(X_adjusted)
-            
-            # Always adjust probabilities to ensure realistic distribution
-            logger.info("Adjusting probabilities for more accurate predictions...")
-            # Generate more realistic probabilities
-            new_proba = np.zeros_like(proba)
-            
-            # For each prediction, set a varied probability
-            for i in range(len(X)):
-                # Use features to determine probability if possible
-                features_dict = {}
-                
-                # Extract feature values
-                if isinstance(X_adjusted, pd.DataFrame):
-                    # If X_adjusted is a DataFrame, use column names
-                    for col in X_adjusted.columns:
-                        features_dict[col] = X_adjusted.iloc[i][col]
-                else:
-                    # If X_adjusted is a numpy array, use indices
-                    if hasattr(self, 'feature_names_in_'):
-                        for j, name in enumerate(self.feature_names_in_):
-                            if j < X_adjusted.shape[1]:
-                                features_dict[name] = X_adjusted[i, j]
-                
-                # Enhanced rule-based probability calculation
-                age = features_dict.get('age', 0)
-                data_spending = features_dict.get('data_spending', 0)
-                voice_spending = features_dict.get('voice_spending', 0)
-                data_volume = features_dict.get('data_volume', 0)
-                voice_duration = features_dict.get('voice_duration', 0)
-                sms_volume = features_dict.get('sms_volume', 0)
-                
-                # Start with a much lower base probability (most customers don't churn)
-                churn_prob = 0.15  # Much lower base probability
-                
-                # Age factor (older customers more likely to churn)
-                if age > 60:
-                    churn_prob += 0.4  # Only very old customers have high churn risk
-                elif age > 50:
-                    churn_prob += 0.25
-                elif age > 40:
-                    churn_prob += 0.15
-                elif age < 25:
-                    churn_prob -= 0.05
-                
-                # Spending factors (higher spending less likely to churn)
-                if data_spending > 200000:
-                    churn_prob -= 0.15
-                elif data_spending > 150000:
-                    churn_prob -= 0.1
-                elif data_spending < 50000:
-                    churn_prob += 0.15
-                
-                # Voice spending factor
-                if voice_spending > 100000:
-                    churn_prob -= 0.1
-                elif voice_spending < 30000:
-                    churn_prob += 0.1
-                
-                # Usage factors
-                if data_volume > 50:  # Heavy data users
-                    churn_prob -= 0.1  # Less likely to churn
-                
-                if voice_duration < 50:  # Low voice usage
-                    churn_prob += 0.1  # More likely to churn
-                
-                if sms_volume < 10:  # Low SMS usage
-                    churn_prob += 0.05  # Slightly more likely to churn
-                
-                # Check for gender
-                if features_dict.get('gender_Male', 0) > 0:
-                    churn_prob += 0.05  # Males slightly more likely to churn in this dataset
-                
-                # Add some randomness for varied predictions
-                churn_prob += np.random.uniform(-0.1, 0.1)
-                
-                # Ensure probability is between 0.05 and 0.8
-                # Most customers should be below 0.5 (not likely to churn)
-                churn_prob = max(0.05, min(0.8, churn_prob))
-                
-                # Set probabilities
-                new_proba[i, 1] = churn_prob
-                new_proba[i, 0] = 1 - churn_prob
-            
-            return new_proba
-        except Exception as e:
-            logger.error(f"Error in predict_proba: {e}")
-            # Default probabilities with balanced range
-            return np.array([[0.8, 0.2]] * len(X))  # Default to lower churn probability
-    
-    def get_feature_importance(self):
-        """
-        Get feature importance from the base model.
-        
-        Returns
-        -------
-        dict
-            Dictionary mapping feature names to importance values
-        """
-        if self._feature_importance_cache is not None:
-            return self._feature_importance_cache
-            
-        if hasattr(self.base_model, 'feature_importances_'):
-            if hasattr(self, 'feature_names_in_'):
-                importance_dict = dict(zip(
-                    self.feature_names_in_,
-                    self.base_model.feature_importances_
-                ))
-                self._feature_importance_cache = importance_dict
-                return importance_dict
-            else:
-                # No feature names, create generic ones and return as dict
-                n_features = len(self.base_model.feature_importances_)
-                feature_names = [f'feature_{i}' for i in range(n_features)]
-                importance_dict = dict(zip(feature_names, self.base_model.feature_importances_))
-                self._feature_importance_cache = importance_dict
-                return importance_dict
-        
-        # If base model doesn't have feature importances, create synthetic ones
-        if hasattr(self, 'feature_names_in_'):
-            # Create equal importance for all features
-            n_features = len(self.feature_names_in_)
-            equal_importance = 1.0 / n_features if n_features > 0 else 0.0
-            importance_dict = {name: equal_importance for name in self.feature_names_in_}
-            self._feature_importance_cache = importance_dict
-            return importance_dict
-        
-        return {}
-    
-    def get_params(self, deep=True):
-        """
-        Get parameters for this estimator.
-        
-        Parameters
-        ----------
-        deep : bool, default=True
-            If True, will return the parameters for this estimator and
-            contained subobjects that are estimators.
-            
-        Returns
-        -------
-        params : dict
-            Parameter names mapped to their values.
-        """
-        if hasattr(self.base_model, 'get_params'):
-            return self.base_model.get_params(deep=deep)
-        return {}
-    
-    def __getattr__(self, name):
-        """
-        Forward any unknown attributes to the base model.
-        
-        Parameters
-        ----------
-        name : str
-            The attribute name
-            
-        Returns
-        -------
-        The attribute value from the base model
-        """
-        return getattr(self.base_model, name)
-    
-    def __getstate__(self):
-        """
-        Get the state for pickling.
-        
-        Returns
-        -------
-        dict
-            The state to be pickled
-        """
-        state = self.__dict__.copy()
-        return state
-    
-    def __setstate__(self, state):
-        """
-        Set the state after unpickling.
-        
-        Parameters
-        ----------
-        state : dict
-            The state to restore
-        """
-        self.__dict__.update(state)
-
-
 if __name__ == "__main__":
     # Example usage
     from preprocessing import preprocess_pipeline
@@ -911,5 +747,8 @@ if __name__ == "__main__":
         for i, proba in enumerate(probas):
             print(f"Sample {i+1}: {proba}")
     
+    # Create outputs directory if it doesn't exist
+    os.makedirs("outputs/models", exist_ok=True)
+    
     # Save the model
-    save_model(model, "models/decision_tree_model.pkl") 
+    save_model(model, "outputs/models/decision_tree_model.pkl") 

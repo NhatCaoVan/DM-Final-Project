@@ -344,7 +344,7 @@ def handle_imbalance(X_train, y_train, method='smote', random_state=42, imbalanc
         return X_train, y_train
 
 
-def preprocess_pipeline(file_path, sheet_name='final_dataset', target_col=None, id_col=None, 
+def preprocess_pipeline(file_path, sheet_name='final_dataset', target_col=None, id_col='id', 
                       test_size=0.2, handle_outliers=True, random_state=42):
     """
     Complete data preprocessing pipeline.
@@ -357,8 +357,8 @@ def preprocess_pipeline(file_path, sheet_name='final_dataset', target_col=None, 
         Sheet name for Excel files
     target_col : str, optional
         Target column name
-    id_col : str, optional
-        ID column to remove
+    id_col : str, default='id'
+        ID column to remove (set to None to keep all columns)
     test_size : float, default=0.2
         Proportion of data to use for testing
     handle_outliers : bool, default=True
@@ -377,6 +377,13 @@ def preprocess_pipeline(file_path, sheet_name='final_dataset', target_col=None, 
     # Determine target column if not provided
     if target_col is None:
         target_col = df.columns[-1]
+    
+    # Auto-detect ID column if it exists and id_col is set to 'id' (default)
+    if id_col == 'id' and 'id' not in df.columns:
+        logger.info("No 'id' column found in dataset, proceeding without ID removal")
+        id_col = None
+    elif id_col and id_col in df.columns:
+        logger.info(f"ID column '{id_col}' found and will be excluded from model features")
     
     # Get dataset description
     description = describe_dataset(df, target_col)
@@ -427,7 +434,8 @@ def preprocess_pipeline(file_path, sheet_name='final_dataset', target_col=None, 
         'preprocessor': preprocessor,
         'feature_names': feature_names,
         'categorical_cols': categorical_cols,
-        'numeric_cols': numeric_cols
+        'numeric_cols': numeric_cols,
+        'id_col_excluded': id_col  # Track which ID column was excluded
     }
 
 

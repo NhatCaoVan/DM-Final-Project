@@ -1,8 +1,0 @@
-Selected features using Top 95% Important Features:
-gender_Male
-age
-data_package_D120
-data_package_BIG90
-data_spending
-data_package_DMAX100
-district_Phu Vang

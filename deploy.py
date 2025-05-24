@@ -108,26 +108,19 @@ def find_dataset():
     return None
 
 
-def run_training_pipeline(dataset_path, quick_mode=False):
+def run_training_pipeline(dataset_path, quick_mode=True):
     """Run the complete training pipeline."""
     logger.info("🚀 Starting training pipeline...")
     
     cmd = [
         sys.executable, "scripts/train_model.py",
         "--data", dataset_path,
-        "--output-dir", str(OUTPUTS_DIR)
+        "--output-dir", str(OUTPUTS_DIR),
+        "--visualize-tree",
+        "--max-depth", "4"
     ]
     
-    if not quick_mode:
-        cmd.extend([
-            "--tune-hyperparams",
-            "--feature-selection", 
-            "--visualize-tree",
-            "--max-depth", "4"
-        ])
-        logger.info("Running full pipeline with hyperparameter tuning and feature selection...")
-    else:
-        logger.info("Running quick pipeline (baseline model only)...")
+    logger.info("Running baseline model training pipeline...")
     
     try:
         # Run the training script
@@ -160,26 +153,17 @@ def verify_outputs():
     """Verify that all expected outputs were generated."""
     logger.info("🔍 Verifying outputs...")
     
+    # Core baseline files that should always be present
     expected_files = [
         OUTPUTS_DIR / "models" / "baseline_model.pkl",
-        OUTPUTS_DIR / "plots" / "feature_importance.png",
-        OUTPUTS_DIR / "plots" / "cumulative_importance.png",
         OUTPUTS_DIR / "plots" / "baseline_roc_curve.png",
         OUTPUTS_DIR / "plots" / "baseline_confusion_matrix.png"
     ]
     
-    # Add optimized model files if full pipeline was run
-    optimized_model_path = OUTPUTS_DIR / "models" / "optimized_model.pkl"
-    if optimized_model_path.exists():
-        expected_files.extend([
-            optimized_model_path,
-            OUTPUTS_DIR / "plots" / "optimized_roc_curve.png",
-            OUTPUTS_DIR / "plots" / "feature_selection_comparison.png"
-        ])
-    
     missing_files = []
     existing_files = []
     
+    # Check required files
     for file_path in expected_files:
         if file_path.exists():
             existing_files.append(file_path)
@@ -189,8 +173,8 @@ def verify_outputs():
     logger.info(f"✅ Generated {len(existing_files)} output files")
     
     if missing_files:
-        logger.warning(f"⚠️  Missing {len(missing_files)} expected files:")
-        for file_path in missing_files[:3]:  # Show first 3 missing files
+        logger.warning(f"⚠️  Missing {len(missing_files)} core files:")
+        for file_path in missing_files:
             logger.warning(f"  - {file_path}")
     
     # List all generated files
@@ -203,7 +187,9 @@ def verify_outputs():
     
     logger.info(f"📊 Total generated files: {len(all_outputs)}")
     
-    return len(existing_files) > 0
+    # Success if we have at least the baseline model
+    baseline_model_exists = (OUTPUTS_DIR / "models" / "baseline_model.pkl").exists()
+    return baseline_model_exists
 
 
 def launch_streamlit():
@@ -230,8 +216,6 @@ def launch_streamlit():
 def main():
     """Main deployment function."""
     parser = argparse.ArgumentParser(description='Deploy Customer Churn Prediction Project')
-    parser.add_argument('--quick', action='store_true', 
-                       help='Run quick mode (baseline model only, faster)')
     parser.add_argument('--no-streamlit', action='store_true',
                        help='Skip launching Streamlit (training only)')
     parser.add_argument('--dataset', type=str,
@@ -261,7 +245,7 @@ def main():
             return 1
     
     # Step 4: Run training pipeline
-    if not run_training_pipeline(dataset_path, quick_mode=args.quick):
+    if not run_training_pipeline(dataset_path):
         return 1
     
     # Step 5: Verify outputs

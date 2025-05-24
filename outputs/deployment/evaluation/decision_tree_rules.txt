@@ -1,0 +1,59 @@
+DECISION TREE RULES ANALYSIS
+==================================================
+
+1. BASIC TREE STRUCTURE
+------------------------------
+|--- data_package_BIG90 <= 1.00
+|   |--- gender_Male <= 1.00
+|   |   |--- gender_Male <= 0.00
+|   |   |   |--- data_spending <= -1.01
+|   |   |   |   |--- age <= 0.56
+|   |   |   |   |   |--- weights: [0.00, 289.00] class: Churn
+|   |   |   |   |--- age >  0.56
+|   |   |   |   |   |--- weights: [38.00, 48.00] class: Churn
+|   |   |   |--- data_spending >  -1.01
+|   |   |   |   |--- data_spending <= -0.46
+|   |   |   |   |   |--- weights: [381.00, 121.00] class: No Churn
+|   |   |   |   |--- data_spending >  -0.46
+|   |   |   |   |   |--- weights: [211.00, 622.00] class: Churn
+|   |   |--- gender_Male >  0.00
+|   |   |   |--- weights: [0.00, 462.00] class: Churn
+|   |--- gender_Male >  1.00
+|   |   |--- data_package_DMAX100 <= 0.03
+|   |   |   |--- age <= 0.37
+|   |   |   |   |--- data_package_D120 <= 0.02
+|   |   |   |   |   |--- weights: [1260.00, 176.00] class: No Churn
+|   |   |   |   |--- data_package_D120 >  0.02
+|   |   |   |   |   |--- weights: [2.00, 151.00] class: Churn
+|   |   |   |--- age >  0.37
+|   |   |   |   |--- district_Phu Vang <= 0.98
+|   |   |   |   |   |--- weights: [274.00, 627.00] class: Churn
+|   |   |   |   |--- district_Phu Vang >  0.98
+|   |   |   |   |   |--- weights: [181.00, 44.00] class: No Churn
+|   |   |--- data_package_DMAX100 >  0.03
+|   |   |   |--- age <= 0.56
+|   |   |   |   |--- data_volume <= 1.87
+|   |   |   |   |   |--- weights: [0.00, 219.00] class: Churn
+|   |   |   |   |--- data_volume >  1.87
+|   |   |   |   |   |--- weights: [1.00, 4.00] class: Churn
+|   |   |   |--- age >  0.56
+|   |   |   |   |--- data_package_DMAX100 <= 0.87
+|   |   |   |   |   |--- weights: [0.00, 8.00] class: Churn
+|   |   |   |   |--- data_package_DMAX100 >  0.87
+|   |   |   |   |   |--- weights: [18.00, 1.00] class: No Churn
+|--- data_package_BIG90 >  1.00
+|   |--- age <= 2.38
+|   |   |--- age <= -1.83
+|   |   |   |--- voice_duration <= -0.15
+|   |   |   |   |--- weights: [2.00, 5.00] class: Churn
+|   |   |   |--- voice_duration >  -0.15
+|   |   |   |   |--- weights: [7.00, 0.00] class: No Churn
+|   |   |--- age >  -1.83
+|   |   |   |--- weights: [408.00, 0.00] class: No Churn
+|   |--- age >  2.38
+|   |   |--- weights: [0.00, 6.00] class: Churn
+
+
+2. DETAILED RULES EXPLANATION
+------------------------------
+Decision tree analysis not available.

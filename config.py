@@ -33,14 +33,6 @@ OUTLIER_THRESHOLD = 1.5
 IMBALANCE_THRESHOLD = 1.5
 RESAMPLING_METHOD = "smote"
 
-# Feature selection settings
-FEATURE_IMPORTANCE_THRESHOLD = 0.95
-TOP_N_FEATURES = 15
-FEATURE_SELECTION_METHODS = [
-    'model_importance_mean',
-    'model_importance_median', 
-    'cumulative_95'
-]
 
 # Hyperparameter tuning settings
 PARAM_GRID = {
